@@ -16,7 +16,7 @@ import {
 export let isFirestoreQuotaExhausted = true;
 
 // Dedicated Firebase Realtime Database for Admin Panel & Website System Connection
-export const ADMIN_RTDB_BASE_URL = 'https://ub999-live-admin-default-rtdb.firebaseio.com';
+export const ADMIN_RTDB_BASE_URL = 'https://ub999-admin-default-rtdb.firebaseio.com';
 
 // Immediately disable Firestore network to prevent overloaded retries and backoff delay errors
 try {
@@ -156,61 +156,9 @@ const DEFAULT_SIGNALS: LiveSignalData = {
   updatedAt: new Date().toLocaleTimeString('bn-BD')
 };
 
-export const INITIAL_SEED_DEPOSITS: DepositRecord[] = [
-  {
-    id: 'DEP_1728882001',
-    userId: 'user_01711223344',
-    phone: '01711223344',
-    method: 'bkash',
-    amount: 1000,
-    trxId: 'BL9A2K998Z',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'DEP_1728881502',
-    userId: 'user_01955667788',
-    phone: '01955667788',
-    method: 'nagad',
-    amount: 2500,
-    trxId: 'NG7X810P44',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 42 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'DEP_1728879003',
-    userId: 'user_01822334455',
-    phone: '01822334455',
-    method: 'bkash',
-    amount: 500,
-    trxId: 'BK3M10992L',
-    status: 'approved',
-    createdAt: new Date(Date.now() - 120 * 60 * 1000).toISOString()
-  }
-];
+export const INITIAL_SEED_DEPOSITS: DepositRecord[] = [];
 
-export const INITIAL_SEED_WITHDRAWALS: WithdrawRecord[] = [
-  {
-    id: 'WTH_1728882101',
-    userId: 'user_01799887766',
-    phone: '01799887766',
-    method: 'bkash',
-    amount: 2000,
-    accountNumber: '01799887766',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'WTH_1728880402',
-    userId: 'user_01633445566',
-    phone: '01633445566',
-    method: 'nagad',
-    amount: 1500,
-    accountNumber: '01633445566',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 65 * 60 * 1000).toISOString()
-  }
-];
+export const INITIAL_SEED_WITHDRAWALS: WithdrawRecord[] = [];
 
 export const INITIAL_SEED_USERS: UserRecord[] = [
   {
@@ -607,19 +555,16 @@ export function subscribeToDeposits(callback: (deposits: DepositRecord[]) => voi
       const res = await fetch(`${ADMIN_RTDB_BASE_URL}/deposits.json?t=${Date.now()}`);
       if (res.ok) {
         const cloudData = await res.json();
-        if (cloudData && typeof cloudData === 'object') {
+        if (cloudData === null) {
+          localStorage.removeItem('ub999_all_deposits');
+          callback([]);
+        } else if (cloudData && typeof cloudData === 'object') {
           const cloudDeps: DepositRecord[] = Object.values(cloudData);
-          if (cloudDeps.length > 0) {
-            const local = getLocalDeposits();
-            const map = new Map<string, DepositRecord>();
-            local.forEach(d => map.set(d.id, d));
-            cloudDeps.forEach(d => map.set(d.id, d));
-            const combined = Array.from(map.values()).sort(
-              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
-            localStorage.setItem('ub999_all_deposits', JSON.stringify(combined));
-            callback(combined);
-          }
+          const combined = cloudDeps.sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          localStorage.setItem('ub999_all_deposits', JSON.stringify(combined));
+          callback(combined);
         }
       }
     } catch {}
@@ -779,19 +724,16 @@ export function subscribeToWithdrawals(callback: (withdrawals: WithdrawRecord[])
       const res = await fetch(`${ADMIN_RTDB_BASE_URL}/withdrawals.json?t=${Date.now()}`);
       if (res.ok) {
         const cloudData = await res.json();
-        if (cloudData && typeof cloudData === 'object') {
+        if (cloudData === null) {
+          localStorage.removeItem('ub999_all_withdrawals');
+          callback([]);
+        } else if (cloudData && typeof cloudData === 'object') {
           const cloudWths: WithdrawRecord[] = Object.values(cloudData);
-          if (cloudWths.length > 0) {
-            const local = getLocalWithdrawals();
-            const map = new Map<string, WithdrawRecord>();
-            local.forEach(w => map.set(w.id, w));
-            cloudWths.forEach(w => map.set(w.id, w));
-            const combined = Array.from(map.values()).sort(
-              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
-            localStorage.setItem('ub999_all_withdrawals', JSON.stringify(combined));
-            callback(combined);
-          }
+          const combined = cloudWths.sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          localStorage.setItem('ub999_all_withdrawals', JSON.stringify(combined));
+          callback(combined);
         }
       }
     } catch {}

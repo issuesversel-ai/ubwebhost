@@ -135,6 +135,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
   const [signalSuccess, setSignalSuccess] = useState('');
   const hasLoadedBkashFromCloudRef = useRef(false);
   const hasLoadedNagadFromCloudRef = useRef(false);
+  const isEditingNumbersRef = useRef(false);
 
   // Deposit Approval & Balance Add Modal State
   const [selectedDepositForApproval, setSelectedDepositForApproval] = useState<DepositRecord | null>(null);
@@ -179,49 +180,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
     const unsubSettings = subscribeToSettings((s) => {
       setSettings(s);
 
-      // Safe update for bKash numbers: ONLY overwrite if cloud actually has non-empty valid numbers
-      if (s.bkashNumbers && Array.isArray(s.bkashNumbers)) {
-        const validItems = s.bkashNumbers.filter(num => num && !isDummyNumber(num) && num.trim().length >= 10);
-        if (validItems.length > 0) {
-          const incomingBkash = Array(10).fill('');
-          s.bkashNumbers.forEach((num, idx) => {
-            if (idx < 10 && num && !isDummyNumber(num)) incomingBkash[idx] = num.trim();
+      // Safe update for bKash numbers: ONLY overwrite if cloud actually has non-empty valid numbers and user is NOT typing
+      if (!isEditingNumbersRef.current) {
+        if (s.bkashNumbers && Array.isArray(s.bkashNumbers)) {
+          const validItems = s.bkashNumbers.filter(num => num && !isDummyNumber(num) && num.trim().length >= 10);
+          if (validItems.length > 0) {
+            const incomingBkash = Array(10).fill('');
+            s.bkashNumbers.forEach((num, idx) => {
+              if (idx < 10 && num && !isDummyNumber(num)) incomingBkash[idx] = num.trim();
+            });
+            setBkashList(incomingBkash);
+            hasLoadedBkashFromCloudRef.current = true;
+          }
+        } else if (s.bkashNumber && !isDummyNumber(s.bkashNumber) && s.bkashNumber.trim().length >= 10) {
+          setBkashList(prev => {
+            if (prev.some(Boolean)) return prev;
+            const list = Array(10).fill('');
+            list[0] = s.bkashNumber.trim();
+            return list;
           });
-          setBkashList(incomingBkash);
           hasLoadedBkashFromCloudRef.current = true;
         }
-      } else if (s.bkashNumber && !isDummyNumber(s.bkashNumber) && s.bkashNumber.trim().length >= 10) {
-        setBkashList(prev => {
-          if (prev.some(Boolean)) return prev;
-          const list = Array(10).fill('');
-          list[0] = s.bkashNumber.trim();
-          return list;
-        });
-        hasLoadedBkashFromCloudRef.current = true;
       }
       if (s.activeBkashIndex !== undefined) {
         setActiveBkashIdx(s.activeBkashIndex);
       }
 
-      // Safe update for Nagad numbers: ONLY overwrite if cloud actually has non-empty valid numbers
-      if (s.nagadNumbers && Array.isArray(s.nagadNumbers)) {
-        const validItems = s.nagadNumbers.filter(num => num && !isDummyNumber(num) && num.trim().length >= 10);
-        if (validItems.length > 0) {
-          const incomingNagad = Array(10).fill('');
-          s.nagadNumbers.forEach((num, idx) => {
-            if (idx < 10 && num && !isDummyNumber(num)) incomingNagad[idx] = num.trim();
+      // Safe update for Nagad numbers: ONLY overwrite if cloud actually has non-empty valid numbers and user is NOT typing
+      if (!isEditingNumbersRef.current) {
+        if (s.nagadNumbers && Array.isArray(s.nagadNumbers)) {
+          const validItems = s.nagadNumbers.filter(num => num && !isDummyNumber(num) && num.trim().length >= 10);
+          if (validItems.length > 0) {
+            const incomingNagad = Array(10).fill('');
+            s.nagadNumbers.forEach((num, idx) => {
+              if (idx < 10 && num && !isDummyNumber(num)) incomingNagad[idx] = num.trim();
+            });
+            setNagadList(incomingNagad);
+            hasLoadedNagadFromCloudRef.current = true;
+          }
+        } else if (s.nagadNumber && !isDummyNumber(s.nagadNumber) && s.nagadNumber.trim().length >= 10) {
+          setNagadList(prev => {
+            if (prev.some(Boolean)) return prev;
+            const list = Array(10).fill('');
+            list[0] = s.nagadNumber.trim();
+            return list;
           });
-          setNagadList(incomingNagad);
           hasLoadedNagadFromCloudRef.current = true;
         }
-      } else if (s.nagadNumber && !isDummyNumber(s.nagadNumber) && s.nagadNumber.trim().length >= 10) {
-        setNagadList(prev => {
-          if (prev.some(Boolean)) return prev;
-          const list = Array(10).fill('');
-          list[0] = s.nagadNumber.trim();
-          return list;
-        });
-        hasLoadedNagadFromCloudRef.current = true;
       }
       if (s.activeNagadIndex !== undefined) {
         setActiveNagadIdx(s.activeNagadIndex);
@@ -1102,19 +1107,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
                         type="text"
                         placeholder={`বিকাশ নম্বর ${idx + 1}`}
                         value={num}
+                        onFocus={() => {
+                          isEditingNumbersRef.current = true;
+                        }}
                         onChange={(e) => {
+                          isEditingNumbersRef.current = true;
                           const updated = [...bkashList];
                           updated[idx] = e.target.value;
                           setBkashList(updated);
                         }}
                         onBlur={() => {
-                          const clean = bkashList.map(n => (n || '').trim());
-                          const active = clean.find(Boolean) || '';
-                          updateSystemSettings({
-                            bkashNumber: active,
-                            bkashNumbers: clean,
-                            updatedAt: Date.now()
-                          });
+                          setTimeout(() => {
+                            isEditingNumbersRef.current = false;
+                          }, 1500);
                         }}
                         className="flex-1 bg-slate-900 border border-slate-700 rounded-lg py-2.5 px-3 text-xs sm:text-sm font-mono text-white focus:outline-none focus:border-pink-500"
                       />
@@ -1139,19 +1144,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
                         type="text"
                         placeholder={`নগদ নম্বর ${idx + 1}`}
                         value={num}
+                        onFocus={() => {
+                          isEditingNumbersRef.current = true;
+                        }}
                         onChange={(e) => {
+                          isEditingNumbersRef.current = true;
                           const updated = [...nagadList];
                           updated[idx] = e.target.value;
                           setNagadList(updated);
                         }}
                         onBlur={() => {
-                          const clean = nagadList.map(n => (n || '').trim());
-                          const active = clean.find(Boolean) || '';
-                          updateSystemSettings({
-                            nagadNumber: active,
-                            nagadNumbers: clean,
-                            updatedAt: Date.now()
-                          });
+                          setTimeout(() => {
+                            isEditingNumbersRef.current = false;
+                          }, 1500);
                         }}
                         className="flex-1 bg-slate-900 border border-slate-700 rounded-lg py-2.5 px-3 text-xs sm:text-sm font-mono text-white focus:outline-none focus:border-orange-500"
                       />
