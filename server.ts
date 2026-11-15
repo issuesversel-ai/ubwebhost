@@ -58,65 +58,13 @@ const DEFAULT_SETTINGS = {
   winRate: 65,
   aviatorNextTarget: 2.85,
   aviatorRigMode: 'auto',
-  firebaseRtdbUrl: 'https://ub-999-project-default-rtdb.firebaseio.com',
+  firebaseRtdbUrl: 'https://ub999-web-signal-default-rtdb.firebaseio.com',
   updatedAt: 1791961001287
 };
 
-const INITIAL_DEPOSITS = [
-  {
-    id: 'DEP_1728882001',
-    userId: 'user_01711223344',
-    phone: '01711223344',
-    method: 'bkash',
-    amount: 1000,
-    trxId: 'BL9A2K998Z',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'DEP_1728881502',
-    userId: 'user_01955667788',
-    phone: '01955667788',
-    method: 'nagad',
-    amount: 2500,
-    trxId: 'NG7X810P44',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 42 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'DEP_1728879003',
-    userId: 'user_01822334455',
-    phone: '01822334455',
-    method: 'bkash',
-    amount: 500,
-    trxId: 'BK3M10992L',
-    status: 'approved',
-    createdAt: new Date(Date.now() - 120 * 60 * 1000).toISOString()
-  }
-];
+const INITIAL_DEPOSITS: any[] = [];
 
-const INITIAL_WITHDRAWALS = [
-  {
-    id: 'WTH_1728882101',
-    userId: 'user_01799887766',
-    phone: '01799887766',
-    method: 'bkash',
-    amount: 2000,
-    accountNumber: '01799887766',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'WTH_1728880402',
-    userId: 'user_01633445566',
-    phone: '01633445566',
-    method: 'nagad',
-    amount: 1500,
-    accountNumber: '01633445566',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 65 * 60 * 1000).toISOString()
-  }
-];
+const INITIAL_WITHDRAWALS: any[] = [];
 
 const INITIAL_SIGNALS = {
   isEnabled: true,
@@ -321,7 +269,7 @@ async function syncLiveStateToFirebase(force: boolean = false) {
     const live = getLiveAviatorState();
     const currentSignals = readJsonFile('signals.json', INITIAL_SIGNALS);
     const settings = readJsonFile('system_settings.json', DEFAULT_SETTINGS);
-    const rtdbBase = ((settings as any).firebaseRtdbUrl || 'https://ub-999-project-default-rtdb.firebaseio.com').trim().replace(/\/+$/, '');
+    const rtdbBase = ((settings as any).firebaseRtdbUrl || 'https://ub999-web-signal-default-rtdb.firebaseio.com').trim().replace(/\/+$/, '');
 
     if (!rtdbBase.startsWith('http')) {
       isSyncingFirebase = false;
@@ -476,6 +424,18 @@ async function startServer() {
     }
   });
 
+  app.delete('/api/deposits/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const current = readJsonFile<any[]>('deposits.json', INITIAL_DEPOSITS);
+      const filtered = current.filter(d => d.id !== id);
+      writeJsonFile('deposits.json', filtered);
+      res.json({ success: true, id });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // 3. Withdrawals API
   app.get('/api/withdrawals', (req, res) => {
     const data = readJsonFile('withdrawals.json', INITIAL_WITHDRAWALS);
@@ -519,6 +479,18 @@ async function startServer() {
       if (found) {
         writeJsonFile('withdrawals.json', updated);
       }
+      res.json({ success: true, id });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/withdrawals/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const current = readJsonFile<any[]>('withdrawals.json', INITIAL_WITHDRAWALS);
+      const filtered = current.filter(w => w.id !== id);
+      writeJsonFile('withdrawals.json', filtered);
       res.json({ success: true, id });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -582,7 +554,7 @@ async function startServer() {
   // 4c. Firebase Realtime Database Status & Manual Sync Check API
   app.get('/api/firebase-rtdb/status', async (req, res) => {
     const settings = readJsonFile('system_settings.json', DEFAULT_SETTINGS);
-    const rtdbBase = ((settings as any).firebaseRtdbUrl || 'https://ub-999-project-default-rtdb.firebaseio.com').trim().replace(/\/+$/, '');
+    const rtdbBase = ((settings as any).firebaseRtdbUrl || 'https://ub999-web-signal-default-rtdb.firebaseio.com').trim().replace(/\/+$/, '');
     try {
       const response = await fetch(`${rtdbBase}/live.json`, { method: 'GET' });
       const data = await response.json();
