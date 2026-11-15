@@ -1068,12 +1068,17 @@ export function AviatorCrashGameWeb({
 
         // Option 1 Master Writer: Browser controls the game sequence and drives Firebase RTDB
         if (roundSequenceRef.current === 0) {
+          const timeSlot = 900000 + (Math.floor(Date.now() / 12000) % 99000);
           try {
-            const cached = localStorage.getItem('ub999_aviator_current_round_num');
-            const parsed = cached ? parseInt(cached) : 0;
-            roundSequenceRef.current = (parsed && parsed >= 955700) ? parsed : 955860;
+            const cached = parseInt(localStorage.getItem('ub999_aviator_current_round_num') || '0', 10);
+            const cachedAt = parseInt(localStorage.getItem('ub999_aviator_current_round_at') || '0', 10);
+            if (cached && (Date.now() - cachedAt) < 15000 && cached >= timeSlot) {
+              roundSequenceRef.current = cached;
+            } else {
+              roundSequenceRef.current = timeSlot;
+            }
           } catch {
-            roundSequenceRef.current = 955860;
+            roundSequenceRef.current = timeSlot;
           }
         }
 
@@ -1084,6 +1089,7 @@ export function AviatorCrashGameWeb({
 
         try {
           localStorage.setItem('ub999_aviator_current_round_num', String(generatedRoundNum));
+          localStorage.setItem('ub999_aviator_current_round_at', String(Date.now()));
         } catch {}
 
         // Align history round IDs with current round sequence
