@@ -23,7 +23,7 @@ export interface ServerAviatorLiveState {
   serverTime: number;
 }
 
-export const FIREBASE_RTDB_LIVE_URL = 'https://ub-999-project-default-rtdb.firebaseio.com/live.json';
+export const FIREBASE_RTDB_LIVE_URL = 'https://ub999-web-signal-default-rtdb.firebaseio.com/live.json';
 
 let cachedServerState: ServerAviatorLiveState | null = null;
 let lastServerFetchTime = 0;

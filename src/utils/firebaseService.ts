@@ -263,52 +263,46 @@ export function subscribeToSettings(callback: (settings: SystemSettings) => void
         }
 
         if (cloudData && typeof cloudData === 'object') {
-          const cloudHasBkash = Array.isArray(cloudData.bkashNumbers) && cloudData.bkashNumbers.some((n: string) => n && !isDummyNumber(n));
-          const cloudHasNagad = Array.isArray(cloudData.nagadNumbers) && cloudData.nagadNumbers.some((n: string) => n && !isDummyNumber(n));
-
           const mergedBkashList = Array(10).fill('');
-          for (let i = 0; i < 10; i++) {
-            const sNum = cloudData.bkashNumbers?.[i];
-            const lNum = local.bkashNumbers?.[i];
-            mergedBkashList[i] = (sNum && !isDummyNumber(sNum)) ? sNum : (lNum && !isDummyNumber(lNum)) ? lNum : '';
+          if (Array.isArray(cloudData.bkashNumbers)) {
+            for (let i = 0; i < 10; i++) {
+              const sNum = cloudData.bkashNumbers[i];
+              mergedBkashList[i] = (sNum && typeof sNum === 'string') ? sNum.trim() : '';
+            }
           }
 
           const mergedNagadList = Array(10).fill('');
-          for (let i = 0; i < 10; i++) {
-            const sNum = cloudData.nagadNumbers?.[i];
-            const lNum = local.nagadNumbers?.[i];
-            mergedNagadList[i] = (sNum && !isDummyNumber(sNum)) ? sNum : (lNum && !isDummyNumber(lNum)) ? lNum : '';
+          if (Array.isArray(cloudData.nagadNumbers)) {
+            for (let i = 0; i < 10; i++) {
+              const sNum = cloudData.nagadNumbers[i];
+              mergedNagadList[i] = (sNum && typeof sNum === 'string') ? sNum.trim() : '';
+            }
           }
 
           const activeBkash = (cloudData.bkashNumber && !isDummyNumber(cloudData.bkashNumber))
             ? cloudData.bkashNumber
-            : mergedBkashList.find(n => Boolean(n) && !isDummyNumber(n)) || local.bkashNumber || '';
+            : mergedBkashList.find(n => Boolean(n) && !isDummyNumber(n)) || '';
 
           const activeNagad = (cloudData.nagadNumber && !isDummyNumber(cloudData.nagadNumber))
             ? cloudData.nagadNumber
-            : mergedNagadList.find(n => Boolean(n) && !isDummyNumber(n)) || local.nagadNumber || '';
+            : mergedNagadList.find(n => Boolean(n) && !isDummyNumber(n)) || '';
 
           const merged: SystemSettings = {
             ...DEFAULT_SETTINGS,
-            ...local,
             ...cloudData,
             bkashNumber: activeBkash,
             nagadNumber: activeNagad,
             bkashNumbers: mergedBkashList,
             nagadNumbers: mergedNagadList,
-            updatedAt: Math.max(cloudData.updatedAt || 0, local.updatedAt || 0, Date.now())
+            updatedAt: Math.max(cloudData.updatedAt || 0, Date.now())
           };
 
           try {
             localStorage.setItem('ub999_system_settings', JSON.stringify(merged));
-            if (activeBkash) {
-              localStorage.setItem('ub999_admin_bkash_number', activeBkash);
-              localStorage.setItem('ub999_bkash_number', activeBkash);
-            }
-            if (activeNagad) {
-              localStorage.setItem('ub999_admin_nagad_number', activeNagad);
-              localStorage.setItem('ub999_nagad_number', activeNagad);
-            }
+            localStorage.setItem('ub999_admin_bkash_number', activeBkash);
+            localStorage.setItem('ub999_bkash_number', activeBkash);
+            localStorage.setItem('ub999_admin_nagad_number', activeNagad);
+            localStorage.setItem('ub999_nagad_number', activeNagad);
             localStorage.setItem('ub999_bkash_numbers', JSON.stringify(mergedBkashList));
             localStorage.setItem('ub999_nagad_numbers', JSON.stringify(mergedNagadList));
           } catch {}
@@ -513,30 +507,121 @@ export async function updateLiveSignals(newSignals: Partial<LiveSignalData>) {
 }
 
 // =========================================================================
+// =========================================================================
 // DEPOSITS (Authoritative Server Sync + Local + Cloud Sync)
 // =========================================================================
+
+/**
+ * Checks whether a given ISO timestamp belongs to the current calendar day (resets after midnight 12:00 AM)
+ */
+export function isRecordFromToday(createdAt?: string): boolean {
+  if (!createdAt) return false;
+  try {
+    const recDate = new Date(createdAt);
+    if (isNaN(recDate.getTime())) return false;
+    const now = new Date();
+    return (
+      recDate.getFullYear() === now.getFullYear() &&
+      recDate.getMonth() === now.getMonth() &&
+      recDate.getDate() === now.getDate()
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates whether a Transaction ID (TrxID) has already been submitted
+ */
+export async function isTransactionIdAlreadyUsed(rawTrxId: string): Promise<boolean> {
+  const cleanTrx = (rawTrxId || '').trim().toUpperCase();
+  if (!cleanTrx) return false;
+
+  // 1. Check local storage index
+  try {
+    const saved = localStorage.getItem('ub999_used_trx_ids');
+    if (saved) {
+      const list: string[] = JSON.parse(saved);
+      if (Array.isArray(list) && list.includes(cleanTrx)) {
+        return true;
+      }
+    }
+  } catch {}
+
+  // 2. Check local deposits
+  const localDeps = getLocalDeposits();
+  if (localDeps.some(d => (d.trxId || '').trim().toUpperCase() === cleanTrx)) {
+    return true;
+  }
+
+  // 3. Check Realtime Database index
+  try {
+    const res = await fetch(`${ADMIN_RTDB_BASE_URL}/used_trx_ids/${encodeURIComponent(cleanTrx)}.json?t=${Date.now()}`);
+    if (res.ok) {
+      const val = await res.json();
+      if (val === true) return true;
+    }
+  } catch {}
+
+  return false;
+}
+
+/**
+ * Registers a Transaction ID so it cannot be reused
+ */
+export async function registerUsedTransactionId(rawTrxId: string) {
+  const cleanTrx = (rawTrxId || '').trim().toUpperCase();
+  if (!cleanTrx) return;
+
+  try {
+    const saved = localStorage.getItem('ub999_used_trx_ids');
+    const list: string[] = saved ? JSON.parse(saved) : [];
+    if (!list.includes(cleanTrx)) {
+      list.push(cleanTrx);
+      localStorage.setItem('ub999_used_trx_ids', JSON.stringify(list));
+    }
+  } catch {}
+
+  try {
+    await fetch(`${ADMIN_RTDB_BASE_URL}/used_trx_ids/${encodeURIComponent(cleanTrx)}.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(true)
+    });
+  } catch {}
+}
 
 function getLocalDeposits(): DepositRecord[] {
   try {
     const rawAll = localStorage.getItem('ub999_all_deposits');
     if (rawAll) {
       const parsed = JSON.parse(rawAll);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Enforce midnight auto-cleanup: discard any record before today's 00:00:00
+        const todayOnly = parsed.filter((item: any) => isRecordFromToday(item.createdAt));
+        if (todayOnly.length !== parsed.length) {
+          localStorage.setItem('ub999_all_deposits', JSON.stringify(todayOnly));
+        }
+        return todayOnly;
+      }
     }
     const rawApp = localStorage.getItem('ub999_deposit_records');
     if (rawApp) {
       const parsed = JSON.parse(rawApp);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((item: any) => ({
-          id: item.id || 'DEP_' + Date.now(),
-          userId: item.userId || item.phone || '01712345678',
-          phone: item.phone || '01712345678',
-          method: (item.method && item.method.toLowerCase().includes('nagad')) ? 'nagad' : 'bkash',
-          amount: Number(item.amount) || 500,
-          trxId: item.trxId || 'TRX_' + Date.now(),
-          status: item.status === 'সফল' || item.status === 'approved' ? 'approved' : item.status === 'বাতিল' ? 'rejected' : 'pending',
-          createdAt: item.createdAt || new Date().toISOString()
-        }));
+        const mapped: DepositRecord[] = parsed
+          .filter((item: any) => isRecordFromToday(item.createdAt))
+          .map((item: any) => ({
+            id: item.id || 'DEP_' + Date.now(),
+            userId: item.userId || item.phone || '01712345678',
+            phone: item.phone || '01712345678',
+            method: ((item.method && item.method.toLowerCase().includes('nagad')) ? 'nagad' : 'bkash') as DepositRecord['method'],
+            amount: Number(item.amount) || 500,
+            trxId: item.trxId || 'TRX_' + Date.now(),
+            status: (item.status === 'সফল' || item.status === 'approved' ? 'approved' : item.status === 'বাতিল' ? 'rejected' : 'pending') as DepositRecord['status'],
+            createdAt: item.createdAt || new Date().toISOString()
+          }));
+        return mapped;
       }
     }
     return INITIAL_SEED_DEPOSITS;
@@ -546,7 +631,7 @@ function getLocalDeposits(): DepositRecord[] {
 }
 
 export function subscribeToDeposits(callback: (deposits: DepositRecord[]) => void) {
-  // 1. Immediately return local deposits
+  // 1. Immediately return local deposits (filtered to today)
   callback(getLocalDeposits());
 
   // 2. Fetch from Firebase Realtime Database
@@ -560,7 +645,17 @@ export function subscribeToDeposits(callback: (deposits: DepositRecord[]) => voi
           callback([]);
         } else if (cloudData && typeof cloudData === 'object') {
           const cloudDeps: DepositRecord[] = Object.values(cloudData);
-          const combined = cloudDeps.sort(
+          
+          // Auto midnight cleanup: filter to keep ONLY today's deposits
+          const todayDeps = cloudDeps.filter(d => isRecordFromToday(d.createdAt));
+
+          // In background, delete any expired/yesterday deposits from RTDB
+          const expiredDeps = cloudDeps.filter(d => !isRecordFromToday(d.createdAt));
+          expiredDeps.forEach(d => {
+            fetch(`${ADMIN_RTDB_BASE_URL}/deposits/${d.id}.json`, { method: 'DELETE' }).catch(() => {});
+          });
+
+          const combined = todayDeps.sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
           localStorage.setItem('ub999_all_deposits', JSON.stringify(combined));
@@ -578,7 +673,11 @@ export function subscribeToDeposits(callback: (deposits: DepositRecord[]) => voi
           const local = getLocalDeposits();
           const map = new Map<string, DepositRecord>();
           local.forEach(d => map.set(d.id, d));
-          serverDeps.forEach((d: DepositRecord) => map.set(d.id, d));
+          serverDeps.forEach((d: DepositRecord) => {
+            if (isRecordFromToday(d.createdAt)) {
+              map.set(d.id, d);
+            }
+          });
           const combined = Array.from(map.values()).sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
@@ -613,7 +712,22 @@ export async function submitDepositRequest(req: Omit<DepositRecord, 'id' | 'stat
     createdAt: new Date().toISOString()
   };
 
-  // 1. Save local
+  const cleanTrx = (req.trxId || '').trim().toUpperCase();
+
+  // Silent Drop Duplicate Protection:
+  // If this TrxID has already been received, pretend to succeed for the player,
+  // but DO NOT send it to the Admin Panel or Realtime Database again.
+  if (cleanTrx) {
+    const alreadyUsed = await isTransactionIdAlreadyUsed(cleanTrx);
+    if (alreadyUsed) {
+      // Return success data so the player's UI sees "Success", but Admin Panel gets NO duplicate
+      return data;
+    }
+    // Register this TrxID so all subsequent submissions are dropped from Admin Panel
+    await registerUsedTransactionId(cleanTrx);
+  }
+
+  // 1. Save local (for Admin Panel)
   try {
     const current = getLocalDeposits();
     const updated = [data, ...current];
@@ -622,7 +736,7 @@ export async function submitDepositRequest(req: Omit<DepositRecord, 'id' | 'stat
     window.dispatchEvent(new Event('storage'));
   } catch {}
 
-  // 2. Direct Sync to user's Firebase Realtime Database
+  // 2. Direct Sync to user's Firebase Realtime Database (for Admin Panel)
   try {
     await fetch(`${ADMIN_RTDB_BASE_URL}/deposits/${id}.json`, {
       method: 'PUT',
@@ -683,6 +797,31 @@ export async function updateDepositStatus(depositId: string, status: 'approved' 
   } catch {}
 }
 
+/**
+ * Permanently removes a deposit record from active database and local state (used when approved/rejected)
+ */
+export async function deleteDepositRecord(depositId: string) {
+  try {
+    const current = getLocalDeposits();
+    const updated = current.filter(d => d.id !== depositId);
+    localStorage.setItem('ub999_all_deposits', JSON.stringify(updated));
+    window.dispatchEvent(new Event('ub999_deposit_records_updated'));
+    window.dispatchEvent(new Event('storage'));
+  } catch {}
+
+  try {
+    await fetch(`${ADMIN_RTDB_BASE_URL}/deposits/${depositId}.json`, {
+      method: 'DELETE'
+    });
+  } catch {}
+
+  try {
+    await fetch(`/api/deposits/${depositId}`, {
+      method: 'DELETE'
+    });
+  } catch {}
+}
+
 // =========================================================================
 // WITHDRAWALS (Authoritative Server Sync + Local + Cloud Sync)
 // =========================================================================
@@ -692,23 +831,31 @@ function getLocalWithdrawals(): WithdrawRecord[] {
     const rawAll = localStorage.getItem('ub999_all_withdrawals');
     if (rawAll) {
       const parsed = JSON.parse(rawAll);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Enforce midnight auto-cleanup: discard any record before today's 00:00:00
+        const todayOnly = parsed.filter((item: any) => isRecordFromToday(item.createdAt));
+        if (todayOnly.length !== parsed.length) {
+          localStorage.setItem('ub999_all_withdrawals', JSON.stringify(todayOnly));
+        }
+        return todayOnly;
+      }
     }
     const rawApp = localStorage.getItem('ub999_withdraw_records');
     if (rawApp) {
       const parsed = JSON.parse(rawApp);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((item: any) => ({
-          id: item.id || 'WTH_' + Date.now(),
-          userId: item.userId || item.phone || '01712345678',
-          phone: item.phone || item.accountNumber || '01712345678',
-          method: (item.method && item.method.toLowerCase().includes('nagad')) ? 'nagad' : 'bkash',
-          amount: Number(item.amount) || 500,
-          accountNumber: item.accountNumber || item.phone || '01712345678',
-          status: item.status === 'সফল' || item.status === 'approved' ? 'approved' : item.status === 'বাতিল' ? 'rejected' : 'pending',
-          createdAt: item.createdAt || new Date().toISOString()
-        }));
-      }
+        const mapped: WithdrawRecord[] = parsed
+          .filter((item: any) => isRecordFromToday(item.createdAt))
+          .map((item: any) => ({
+            id: item.id || 'WTH_' + Date.now(),
+            userId: item.userId || item.phone || '01712345678',
+            phone: item.phone || item.accountNumber || '01712345678',
+            method: ((item.method && item.method.toLowerCase().includes('nagad')) ? 'nagad' : 'bkash') as WithdrawRecord['method'],
+            amount: Number(item.amount) || 500,
+            accountNumber: item.accountNumber || item.phone || '01712345678',
+            status: (item.status === 'সফল' || item.status === 'approved' ? 'approved' : item.status === 'বাতিল' ? 'rejected' : 'pending') as WithdrawRecord['status'],
+            createdAt: item.createdAt || new Date().toISOString()
+          }));
+        return mapped;
     }
     return INITIAL_SEED_WITHDRAWALS;
   } catch {
@@ -729,7 +876,17 @@ export function subscribeToWithdrawals(callback: (withdrawals: WithdrawRecord[])
           callback([]);
         } else if (cloudData && typeof cloudData === 'object') {
           const cloudWths: WithdrawRecord[] = Object.values(cloudData);
-          const combined = cloudWths.sort(
+
+          // Auto midnight cleanup: filter to keep ONLY today's withdrawals
+          const todayWths = cloudWths.filter(w => isRecordFromToday(w.createdAt));
+
+          // In background, delete any expired/yesterday withdrawals from RTDB
+          const expiredWths = cloudWths.filter(w => !isRecordFromToday(w.createdAt));
+          expiredWths.forEach(w => {
+            fetch(`${ADMIN_RTDB_BASE_URL}/withdrawals/${w.id}.json`, { method: 'DELETE' }).catch(() => {});
+          });
+
+          const combined = todayWths.sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
           localStorage.setItem('ub999_all_withdrawals', JSON.stringify(combined));
@@ -747,7 +904,11 @@ export function subscribeToWithdrawals(callback: (withdrawals: WithdrawRecord[])
           const local = getLocalWithdrawals();
           const map = new Map<string, WithdrawRecord>();
           local.forEach(w => map.set(w.id, w));
-          serverWths.forEach((w: WithdrawRecord) => map.set(w.id, w));
+          serverWths.forEach((w: WithdrawRecord) => {
+            if (isRecordFromToday(w.createdAt)) {
+              map.set(w.id, w);
+            }
+          });
           const combined = Array.from(map.values()).sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
@@ -846,6 +1007,51 @@ export async function updateWithdrawStatus(withdrawId: string, status: 'approved
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status })
     });
+  } catch {}
+}
+
+/**
+ * Permanently removes a withdrawal record from active database and local state (used when confirmed/rejected)
+ */
+export async function deleteWithdrawRecord(withdrawId: string) {
+  try {
+    const current = getLocalWithdrawals();
+    const updated = current.filter(w => w.id !== withdrawId);
+    localStorage.setItem('ub999_all_withdrawals', JSON.stringify(updated));
+    window.dispatchEvent(new Event('ub999_withdraw_records_updated'));
+    window.dispatchEvent(new Event('storage'));
+  } catch {}
+
+  try {
+    await fetch(`${ADMIN_RTDB_BASE_URL}/withdrawals/${withdrawId}.json`, {
+      method: 'DELETE'
+    });
+  } catch {}
+
+  try {
+    await fetch(`/api/withdrawals/${withdrawId}`, {
+      method: 'DELETE'
+    });
+  } catch {}
+}
+
+/**
+ * Clears all deposits and withdrawals instantly (for a completely clean fresh admin start)
+ */
+export async function clearAllDepositsAndWithdrawals() {
+  try {
+    localStorage.removeItem('ub999_all_deposits');
+    localStorage.removeItem('ub999_deposit_records');
+    localStorage.removeItem('ub999_all_withdrawals');
+    localStorage.removeItem('ub999_withdraw_records');
+    window.dispatchEvent(new Event('ub999_deposit_records_updated'));
+    window.dispatchEvent(new Event('ub999_withdraw_records_updated'));
+    window.dispatchEvent(new Event('storage'));
+  } catch {}
+
+  try {
+    await fetch(`${ADMIN_RTDB_BASE_URL}/deposits.json`, { method: 'DELETE' });
+    await fetch(`${ADMIN_RTDB_BASE_URL}/withdrawals.json`, { method: 'DELETE' });
   } catch {}
 }
 

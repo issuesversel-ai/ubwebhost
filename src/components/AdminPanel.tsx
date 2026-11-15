@@ -4,7 +4,6 @@ import {
   CreditCard,
   ArrowDownCircle,
   ArrowUpCircle,
-  Zap,
   CheckCircle2,
   XCircle,
   ChevronRight,
@@ -23,6 +22,10 @@ import {
   updateUserBalance,
   updateUserStatus,
   saveOrUpdateUser,
+  deleteDepositRecord,
+  deleteWithdrawRecord,
+  clearAllDepositsAndWithdrawals,
+  isRecordFromToday,
   SystemSettings,
   LiveSignalData,
   DepositRecord,
@@ -44,7 +47,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
   const [pinError, setPinError] = useState('');
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'overview' | 'deposits' | 'withdrawals' | 'signals' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'deposits' | 'withdrawals' | 'settings'>('overview');
 
   // Helper to detect dummy placeholder numbers
   const isDummyNumber = (str?: string) => {
@@ -78,13 +81,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
   const OFFICIAL_DEFAULT_BKASH = ['01349782631', '01318097241', '01357287095'];
   const OFFICIAL_DEFAULT_NAGAD = ['01768782530', '01349845888', '01349845906', '01349845902', '01347246605'];
 
-  // Local Form States for Numbers - GUARANTEED NON-EMPTY FALLBACK
+  // Local Form States for Numbers
   const [bkashList, setBkashList] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('ub999_bkash_numbers');
       if (saved) {
         const arr = JSON.parse(saved);
-        if (Array.isArray(arr) && arr.some(n => n && !isDummyNumber(n) && n.trim().length >= 10)) {
+        if (Array.isArray(arr)) {
           const list = Array(10).fill('');
           arr.forEach((n, i) => {
             if (i < 10) list[i] = (n && !isDummyNumber(n)) ? n.trim() : '';
@@ -99,9 +102,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
         return list;
       }
     } catch {}
-    const defaultList = Array(10).fill('');
-    OFFICIAL_DEFAULT_BKASH.forEach((n, i) => { defaultList[i] = n; });
-    return defaultList;
+    return Array(10).fill('');
   });
 
   const [nagadList, setNagadList] = useState<string[]>(() => {
@@ -109,7 +110,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
       const saved = localStorage.getItem('ub999_nagad_numbers');
       if (saved) {
         const arr = JSON.parse(saved);
-        if (Array.isArray(arr) && arr.some(n => n && !isDummyNumber(n) && n.trim().length >= 10)) {
+        if (Array.isArray(arr)) {
           const list = Array(10).fill('');
           arr.forEach((n, i) => {
             if (i < 10) list[i] = (n && !isDummyNumber(n)) ? n.trim() : '';
@@ -124,15 +125,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
         return list;
       }
     } catch {}
-    const defaultList = Array(10).fill('');
-    OFFICIAL_DEFAULT_NAGAD.forEach((n, i) => { defaultList[i] = n; });
-    return defaultList;
+    return Array(10).fill('');
   });
   const [activeBkashIdx, setActiveBkashIdx] = useState<number>(0);
   const [activeNagadIdx, setActiveNagadIdx] = useState<number>(0);
   const [numberTab, setNumberTab] = useState<'bkash' | 'nagad'>('bkash');
   const [saveSuccess, setSaveSuccess] = useState('');
-  const [signalSuccess, setSignalSuccess] = useState('');
   const hasLoadedBkashFromCloudRef = useRef(false);
   const hasLoadedNagadFromCloudRef = useRef(false);
   const isEditingNumbersRef = useRef(false);
@@ -142,37 +140,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
   const [depositApproveAmount, setDepositApproveAmount] = useState<string>('');
   const [depositSuccessMessage, setDepositSuccessMessage] = useState<string>('');
 
-  // Auto-sync any previously entered local numbers to the server on mount
-  useEffect(() => {
-    try {
-      const savedBk = localStorage.getItem('ub999_bkash_numbers');
-      const singleBk = localStorage.getItem('ub999_admin_bkash_number') || localStorage.getItem('ub999_bkash_number');
-      const savedNg = localStorage.getItem('ub999_nagad_numbers');
-      const singleNg = localStorage.getItem('ub999_admin_nagad_number') || localStorage.getItem('ub999_nagad_number');
-
-      let bkList: string[] = [];
-      if (savedBk) {
-        const parsed = JSON.parse(savedBk);
-        if (Array.isArray(parsed) && parsed.some(n => n && !isDummyNumber(n))) bkList = parsed;
-      }
-      let ngList: string[] = [];
-      if (savedNg) {
-        const parsed = JSON.parse(savedNg);
-        if (Array.isArray(parsed) && parsed.some(n => n && !isDummyNumber(n))) ngList = parsed;
-      }
-
-      if (bkList.length > 0 || ngList.length > 0 || (singleBk && !isDummyNumber(singleBk)) || (singleNg && !isDummyNumber(singleNg))) {
-        updateSystemSettings({
-          bkashNumber: (singleBk && !isDummyNumber(singleBk)) ? singleBk : bkList.find(n => Boolean(n)) || '',
-          nagadNumber: (singleNg && !isDummyNumber(singleNg)) ? singleNg : ngList.find(n => Boolean(n)) || '',
-          ...(bkList.length > 0 ? { bkashNumbers: bkList } : {}),
-          ...(ngList.length > 0 ? { nagadNumbers: ngList } : {}),
-          updatedAt: Date.now()
-        });
-      }
-    } catch {}
-  }, []);
-
   // Real-time subscriptions
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -180,52 +147,44 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
     const unsubSettings = subscribeToSettings((s) => {
       setSettings(s);
 
-      // Safe update for bKash numbers: ONLY overwrite if cloud actually has non-empty valid numbers and user is NOT typing
+      // Safe update for bKash numbers: ONLY update when user is NOT typing
       if (!isEditingNumbersRef.current) {
         if (s.bkashNumbers && Array.isArray(s.bkashNumbers)) {
-          const validItems = s.bkashNumbers.filter(num => num && !isDummyNumber(num) && num.trim().length >= 10);
-          if (validItems.length > 0) {
-            const incomingBkash = Array(10).fill('');
-            s.bkashNumbers.forEach((num, idx) => {
-              if (idx < 10 && num && !isDummyNumber(num)) incomingBkash[idx] = num.trim();
-            });
-            setBkashList(incomingBkash);
-            hasLoadedBkashFromCloudRef.current = true;
-          }
-        } else if (s.bkashNumber && !isDummyNumber(s.bkashNumber) && s.bkashNumber.trim().length >= 10) {
-          setBkashList(prev => {
-            if (prev.some(Boolean)) return prev;
-            const list = Array(10).fill('');
-            list[0] = s.bkashNumber.trim();
-            return list;
+          const incomingBkash = Array(10).fill('');
+          s.bkashNumbers.forEach((num, idx) => {
+            if (idx < 10 && num && !isDummyNumber(num)) incomingBkash[idx] = num.trim();
           });
+          setBkashList(incomingBkash);
           hasLoadedBkashFromCloudRef.current = true;
+        } else if (s.bkashNumber && !isDummyNumber(s.bkashNumber) && s.bkashNumber.trim().length >= 10) {
+          const list = Array(10).fill('');
+          list[0] = s.bkashNumber.trim();
+          setBkashList(list);
+          hasLoadedBkashFromCloudRef.current = true;
+        } else if (hasLoadedBkashFromCloudRef.current) {
+          setBkashList(Array(10).fill(''));
         }
       }
       if (s.activeBkashIndex !== undefined) {
         setActiveBkashIdx(s.activeBkashIndex);
       }
 
-      // Safe update for Nagad numbers: ONLY overwrite if cloud actually has non-empty valid numbers and user is NOT typing
+      // Safe update for Nagad numbers: ONLY update when user is NOT typing
       if (!isEditingNumbersRef.current) {
         if (s.nagadNumbers && Array.isArray(s.nagadNumbers)) {
-          const validItems = s.nagadNumbers.filter(num => num && !isDummyNumber(num) && num.trim().length >= 10);
-          if (validItems.length > 0) {
-            const incomingNagad = Array(10).fill('');
-            s.nagadNumbers.forEach((num, idx) => {
-              if (idx < 10 && num && !isDummyNumber(num)) incomingNagad[idx] = num.trim();
-            });
-            setNagadList(incomingNagad);
-            hasLoadedNagadFromCloudRef.current = true;
-          }
-        } else if (s.nagadNumber && !isDummyNumber(s.nagadNumber) && s.nagadNumber.trim().length >= 10) {
-          setNagadList(prev => {
-            if (prev.some(Boolean)) return prev;
-            const list = Array(10).fill('');
-            list[0] = s.nagadNumber.trim();
-            return list;
+          const incomingNagad = Array(10).fill('');
+          s.nagadNumbers.forEach((num, idx) => {
+            if (idx < 10 && num && !isDummyNumber(num)) incomingNagad[idx] = num.trim();
           });
+          setNagadList(incomingNagad);
           hasLoadedNagadFromCloudRef.current = true;
+        } else if (s.nagadNumber && !isDummyNumber(s.nagadNumber) && s.nagadNumber.trim().length >= 10) {
+          const list = Array(10).fill('');
+          list[0] = s.nagadNumber.trim();
+          setNagadList(list);
+          hasLoadedNagadFromCloudRef.current = true;
+        } else if (hasLoadedNagadFromCloudRef.current) {
+          setNagadList(Array(10).fill(''));
         }
       }
       if (s.activeNagadIndex !== undefined) {
@@ -272,11 +231,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
       if (numberTab === 'bkash') {
         const cleanBkashList = bkashList.map(n => (n || '').trim());
         const validItems = cleanBkashList.filter(n => Boolean(n) && n.length >= 10);
-        if (validItems.length === 0) {
-          alert('কমপক্ষে একটি সঠিক বিকাশ নম্বর থাকা আবশ্যক!');
-          return;
-        }
-        const activeBkash = validItems[0];
+        const activeBkash = validItems.length > 0 ? validItems[0] : '';
         const now = Date.now();
         const payload: Partial<SystemSettings> = {
           bkashNumber: activeBkash,
@@ -292,18 +247,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
 
         setBkashList(cleanBkashList);
         hasLoadedBkashFromCloudRef.current = true;
-        setSaveSuccess('বিকাশ নম্বর সফলভাবে সেভ হয়েছে!');
+        setSaveSuccess(activeBkash ? 'বিকাশ নম্বর সফলভাবে সেভ হয়েছে!' : 'বিকাশ নম্বর সম্পূর্ণ রিমুভ করা হয়েছে!');
 
         // 2. Sync to server & cloud (safe)
         await updateSystemSettings(payload);
       } else {
         const cleanNagadList = nagadList.map(n => (n || '').trim());
         const validItems = cleanNagadList.filter(n => Boolean(n) && n.length >= 10);
-        if (validItems.length === 0) {
-          alert('কমপক্ষে একটি সঠিক নগদ নম্বর থাকা আবশ্যক!');
-          return;
-        }
-        const activeNagad = validItems[0];
+        const activeNagad = validItems.length > 0 ? validItems[0] : '';
         const now = Date.now();
         const payload: Partial<SystemSettings> = {
           nagadNumber: activeNagad,
@@ -319,7 +270,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
 
         setNagadList(cleanNagadList);
         hasLoadedNagadFromCloudRef.current = true;
-        setSaveSuccess('নগদ নম্বর সফলভাবে সেভ হয়েছে!');
+        setSaveSuccess(activeNagad ? 'নগদ নম্বর সফলভাবে সেভ হয়েছে!' : 'নগদ নম্বর সম্পূর্ণ রিমুভ করা হয়েছে!');
 
         // 2. Sync to server & cloud (safe)
         await updateSystemSettings(payload);
@@ -332,27 +283,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
     }
   };
 
-  // Signal App Master ON/OFF Switch
-  const handleSetSignalState = async (newState: boolean) => {
-    try {
-      await updateLiveSignals({
-        isEnabled: newState,
-        updatedAt: new Date().toLocaleTimeString('bn-BD')
-      });
-      setSignalSuccess(
-        newState
-          ? '🟢 সিগন্যাল চালু (ON) করা হয়েছে!'
-          : '🔴 সিগন্যাল বন্ধ (OFF) করা হয়েছে! সিগন্যাল আর শো করবে না।'
-      );
-      setTimeout(() => setSignalSuccess(''), 3000);
-    } catch {
-      alert('সিগন্যাল সুইচ পরিবর্তনে সমস্যা হয়েছে');
-    }
-  };
 
-  const handleToggleSignalApp = async () => {
-    await handleSetSignalState(!signals.isEnabled);
-  };
 
   const handleOpenApproveModal = (dep: DepositRecord) => {
     setSelectedDepositForApproval(dep);
@@ -439,7 +370,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
         console.error(err);
       }
 
-      setDepositSuccessMessage(`৳${addAmount} ব্যালেন্স সফলভাবে ব্যবহারকারীর একাউন্টে যোগ হয়েছে!`);
+      // 4. Remove this deposit from active list & database instantly so it clears from the admin panel
+      await deleteDepositRecord(selectedDepositForApproval.id);
+      setDeposits(prev => prev.filter(d => d.id !== selectedDepositForApproval.id));
+
+      setDepositSuccessMessage(`৳${addAmount} ব্যালেন্স সফলভাবে ব্যবহারকারীর একাউন্টে যোগ হয়েছে এবং রিকোয়েস্টটি ক্লিয়ার করা হয়েছে!`);
       setTimeout(() => setDepositSuccessMessage(''), 4000);
       setSelectedDepositForApproval(null);
     } catch (err) {
@@ -448,8 +383,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
   };
 
   const handleRejectDeposit = async (depId: string) => {
-    if (confirm('এই ডিপোজিট রিকোয়েস্টটি বাতিল (Reject) করবেন?')) {
-      await updateDepositStatus(depId, 'rejected');
+    if (confirm('এই ডিপোজিট রিকোয়েস্টটি বাতিল (Reject) করে অ্যাডমিন প্যানেল থেকে মুছে ফেলবেন?')) {
+      await deleteDepositRecord(depId);
+      setDeposits(prev => prev.filter(d => d.id !== depId));
       try {
         const rawLocalDeps = localStorage.getItem('ub999_deposit_records');
         if (rawLocalDeps) {
@@ -467,8 +403,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
   };
 
   const handleApproveWithdraw = async (wth: WithdrawRecord) => {
-    if (confirm(`৳${wth.amount} উইথড্রয়াল পেইড হিসেবে মার্ক করবেন?`)) {
-      await updateWithdrawStatus(wth.id, 'approved');
+    if (confirm(`৳${wth.amount} উইথড্রয়াল পেইড হয়েছে কনফার্ম করে প্যানেল থেকে ক্লিয়ার করবেন?`)) {
+      await deleteWithdrawRecord(wth.id);
+      setWithdrawals(prev => prev.filter(w => w.id !== wth.id));
       try {
         const rawLocalWths = localStorage.getItem('ub999_withdraw_records');
         if (rawLocalWths) {
@@ -502,8 +439,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
   };
 
   const handleRejectWithdraw = async (wth: WithdrawRecord) => {
-    if (confirm('এই উইথড্র রিকোয়েস্টটি বাতিল করে ইউজারের একাউন্টে ব্যালেন্স ফেরত দেবেন?')) {
-      await updateWithdrawStatus(wth.id, 'rejected');
+    if (confirm('এই উইথড্র রিকোয়েস্টটি বাতিল করে ইউজারের একাউন্টে ব্যালেন্স ফেরত দেবেন এবং প্যানেল থেকে ক্লিয়ার করবেন?')) {
+      await deleteWithdrawRecord(wth.id);
+      setWithdrawals(prev => prev.filter(w => w.id !== wth.id));
       const targetUser = users.find(u => u.id === wth.userId || u.phone === wth.phone);
       if (targetUser) {
         await updateUserBalance(targetUser.id, targetUser.balance + wth.amount);
@@ -526,9 +464,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
     }
   };
 
-  // Stats calculation
-  const pendingDepositsCount = deposits.filter(d => d.status === 'pending').length;
-  const pendingWithdrawalsCount = withdrawals.filter(w => w.status === 'pending').length;
+  // Stats & Active Filter: Only today's pending requests (auto-clears at midnight & on approve/reject)
+  const activeDeposits = deposits.filter(d => isRecordFromToday(d.createdAt) && d.status === 'pending');
+  const activeWithdrawals = withdrawals.filter(w => isRecordFromToday(w.createdAt) && w.status === 'pending');
+  const pendingDepositsCount = activeDeposits.length;
+  const pendingWithdrawalsCount = activeWithdrawals.length;
   const totalDepositAmount = deposits
     .filter(d => d.status === 'approved')
     .reduce((sum, d) => sum + (d.amount || 0), 0);
@@ -651,18 +591,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
           </button>
 
           <button
-            onClick={() => setActiveTab('signals')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
-              activeTab === 'signals'
-                ? 'bg-cyan-500 text-slate-950 shadow-md'
-                : 'text-cyan-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Zap className="w-3.5 h-3.5" />
-            SIGNAL MAINTENANCE
-          </button>
-
-          <button
             onClick={() => setActiveTab('settings')}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
               activeTab === 'settings'
@@ -699,39 +627,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
             </div>
 
             {/* Quick Action Hub */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Aviator live signal status */}
-              <div className="bg-gradient-to-br from-slate-900 to-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-lg relative">
-                <div className="flex items-center gap-2 mb-4">
-                  <Zap className="w-5 h-5 text-amber-400" />
-                  <h3 className="font-bold text-white text-base">SIGNAL MAINTENANCE</h3>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => handleSetSignalState(true)}
-                    className={`py-3.5 rounded-xl font-black text-sm tracking-wider flex items-center justify-center gap-2 transition cursor-pointer shadow-md ${
-                      signals.isEnabled
-                        ? 'bg-emerald-500 text-slate-950 ring-2 ring-emerald-400 shadow-emerald-500/20'
-                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'
-                    }`}
-                  >
-                    ON
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetSignalState(false)}
-                    className={`py-3.5 rounded-xl font-black text-sm tracking-wider flex items-center justify-center gap-2 transition cursor-pointer shadow-md ${
-                      !signals.isEnabled
-                        ? 'bg-rose-600 text-white ring-2 ring-rose-500 shadow-rose-600/30'
-                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'
-                    }`}
-                  >
-                    OFF
-                  </button>
-                </div>
-              </div>
+            <div className="grid grid-cols-1 gap-4">
 
               {/* Gateway Status */}
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex items-center justify-between">
@@ -757,8 +653,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-bold text-white">ডিপোজিট রিকোয়েস্ট তালিকা</h2>
-                <p className="text-xs text-slate-400">ব্যবহারকারীদের পাঠানো বিকাশ/নগদ পেমেন্ট ভেরিফাই করুন</p>
+                <p className="text-xs text-slate-400">অপেক্ষমাণ রিকোয়েস্ট (এপ্রুভ/রিজেক্ট করলে বা রাত ১২টায় অটো রিমুভ হবে)</p>
               </div>
+              {activeDeposits.length > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (confirm('সবগুলো ডিপোজিট রিকোয়েস্ট ক্লিয়ার (মুছে) করবেন?')) {
+                      await clearAllDepositsAndWithdrawals();
+                      setDeposits([]);
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-bold transition cursor-pointer"
+                >
+                  সব ক্লিয়ার করুন
+                </button>
+              )}
             </div>
 
             {depositSuccessMessage && (
@@ -768,15 +678,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
               </div>
             )}
 
-            {deposits.length === 0 ? (
+            {activeDeposits.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center">
                 <ArrowDownCircle className="w-12 h-12 text-slate-600 mx-auto mb-2 opacity-50" />
-                <p className="text-sm text-slate-400 font-medium">কোনো ডিপোজিট রিকোয়েস্ট পাওয়া যায়নি</p>
-                <p className="text-xs text-slate-600 mt-1">ওয়েবসাইটে ব্যবহারকারীরা ডিপোজিট রিকোয়েস্ট পাঠালে তা এখানে সরাসরি রিয়েল-টাইমে আসবে।</p>
+                <p className="text-sm text-slate-400 font-medium">কোনো ডিপোজিট রিকোয়েস্ট নেই (সম্পূর্ণ পরিষ্কার)</p>
+                <p className="text-xs text-slate-600 mt-1">ওয়েবসাইটে ব্যবহারকারীরা ডিপোজিট রিকোয়েস্ট পাঠালে তা এখানে সরাসরি আসবে।</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {deposits.map((dep) => (
+                {activeDeposits.map((dep) => (
                   <div
                     key={dep.id}
                     className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
@@ -917,18 +827,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-bold text-white">উইথড্র রিকোয়েস্ট তালিকা</h2>
-                <p className="text-xs text-slate-400">টাকা তোলার আবেদনগুলো দেখুন এবং পেমেন্ট পাঠিয়ে কনফার্ম করুন</p>
+                <p className="text-xs text-slate-400">টাকা তোলার আবেদন (কনফার্ম/বাতিল করলে বা রাত ১২টায় অটো রিমুভ হবে)</p>
               </div>
+              {activeWithdrawals.length > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (confirm('সবগুলো উইথড্র রিকোয়েস্ট ক্লিয়ার (মুছে) করবেন?')) {
+                      await clearAllDepositsAndWithdrawals();
+                      setWithdrawals([]);
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-bold transition cursor-pointer"
+                >
+                  সব ক্লিয়ার করুন
+                </button>
+              )}
             </div>
 
-            {withdrawals.length === 0 ? (
+            {activeWithdrawals.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center">
                 <ArrowUpCircle className="w-12 h-12 text-slate-600 mx-auto mb-2 opacity-50" />
-                <p className="text-sm text-slate-400 font-medium">কোনো উইথড্র রিকোয়েস্ট পাওয়া যায়নি</p>
+                <p className="text-sm text-slate-400 font-medium">কোনো উইথড্র রিকোয়েস্ট নেই (সম্পূর্ণ পরিষ্কার)</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {withdrawals.map((wth) => (
+                {activeWithdrawals.map((wth) => (
                   <div
                     key={wth.id}
                     className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
@@ -980,74 +904,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToMain, onOpenSign
           </div>
         )}
 
-        {/* 4. SIGNAL APP MASTER CONTROL TAB */}
-        {activeTab === 'signals' && (
-          <div className="space-y-6 max-w-2xl mx-auto">
-            <div>
-              <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <Zap className="w-5 h-5 text-amber-400" />
-                SIGNAL MAINTENANCE
-              </h2>
-            </div>
-
-            {signalSuccess && (
-              <div className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 animate-bounce">
-                <CheckCircle2 className="w-4 h-4" />
-                {signalSuccess}
-              </div>
-            )}
-
-            {/* Main Master Control Card */}
-            <div className={`border rounded-3xl p-6 sm:p-8 text-center shadow-2xl transition-all duration-300 ${
-              signals.isEnabled
-                ? 'bg-gradient-to-b from-slate-900 via-slate-900 to-emerald-950/30 border-emerald-500/40'
-                : 'bg-gradient-to-b from-slate-900 via-slate-900 to-rose-950/30 border-rose-500/40'
-            }`}>
-              <div className="my-4">
-                <div className={`w-24 h-24 rounded-3xl mx-auto flex items-center justify-center shadow-xl transition-transform active:scale-95 ${
-                  signals.isEnabled
-                    ? 'bg-emerald-500/10 border-2 border-emerald-500/30 text-emerald-400'
-                    : 'bg-rose-500/10 border-2 border-rose-500/30 text-rose-400'
-                }`}>
-                  <Zap className={`w-12 h-12 ${signals.isEnabled ? 'animate-pulse' : 'opacity-40'}`} />
-                </div>
-                <h3 className="text-xl font-black text-white mt-4">
-                  SIGNAL MAINTENANCE
-                </h3>
-              </div>
-
-              {/* ON/OFF Dual Buttons */}
-              <div className="mt-8 grid grid-cols-2 gap-4">
-                <button
-                  type="button"
-                  onClick={() => handleSetSignalState(true)}
-                  className={`py-4 rounded-2xl font-black text-base flex items-center justify-center gap-2 shadow-2xl transition transform active:scale-95 cursor-pointer ${
-                    signals.isEnabled
-                      ? 'bg-emerald-500 text-slate-950 ring-2 ring-emerald-400 shadow-emerald-500/30'
-                      : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'
-                  }`}
-                >
-                  <CheckCircle2 className="w-5 h-5" />
-                  ON
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSetSignalState(false)}
-                  className={`py-4 rounded-2xl font-black text-base flex items-center justify-center gap-2 shadow-2xl transition transform active:scale-95 cursor-pointer ${
-                    !signals.isEnabled
-                      ? 'bg-rose-600 text-white ring-2 ring-rose-500 shadow-rose-600/30'
-                      : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'
-                  }`}
-                >
-                  <XCircle className="w-5 h-5" />
-                  OFF
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 5. SETTINGS TAB */}
+        {/* 4. SETTINGS TAB */}
         {activeTab === 'settings' && (
           <div className="max-w-2xl mx-auto space-y-6">
             <div>

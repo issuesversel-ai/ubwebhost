@@ -66,7 +66,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     '01347246605'
   ];
 
-  // Live numbers dynamically updated from Admin Panel, with 100% guaranteed fallback to official numbers
+  // Live numbers dynamically updated strictly from Admin Panel
   const [bkashPool, setBkashPool] = useState<string[]>(() => {
     try {
       const local = getLocalSettings();
@@ -74,7 +74,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       if (valid.length > 0) return valid;
       if (local.bkashNumber && local.bkashNumber.trim().length >= 10) return [local.bkashNumber.trim()];
     } catch {}
-    return OFFICIAL_BKASH_NUMBERS;
+    return [];
   });
 
   const [nagadPool, setNagadPool] = useState<string[]>(() => {
@@ -84,7 +84,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       if (valid.length > 0) return valid;
       if (local.nagadNumber && local.nagadNumber.trim().length >= 10) return [local.nagadNumber.trim()];
     } catch {}
-    return OFFICIAL_NAGAD_NUMBERS;
+    return [];
   });
 
   // Listen to Admin Panel updates in real-time
@@ -92,20 +92,20 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     const unsub = subscribeToSettings((s) => {
       if (s.bkashNumbers && Array.isArray(s.bkashNumbers)) {
         const validBk = s.bkashNumbers.filter(n => Boolean(n) && n.trim().length >= 10);
-        if (validBk.length > 0) {
-          setBkashPool(prev => (JSON.stringify(prev) === JSON.stringify(validBk) ? prev : validBk));
-        }
+        setBkashPool(validBk);
       } else if (s.bkashNumber && s.bkashNumber.trim().length >= 10) {
-        setBkashPool(prev => (prev.length === 1 && prev[0] === s.bkashNumber?.trim() ? prev : [s.bkashNumber.trim()]));
+        setBkashPool([s.bkashNumber.trim()]);
+      } else {
+        setBkashPool([]);
       }
 
       if (s.nagadNumbers && Array.isArray(s.nagadNumbers)) {
         const validNg = s.nagadNumbers.filter(n => Boolean(n) && n.trim().length >= 10);
-        if (validNg.length > 0) {
-          setNagadPool(prev => (JSON.stringify(prev) === JSON.stringify(validNg) ? prev : validNg));
-        }
+        setNagadPool(validNg);
       } else if (s.nagadNumber && s.nagadNumber.trim().length >= 10) {
-        setNagadPool(prev => (prev.length === 1 && prev[0] === s.nagadNumber?.trim() ? prev : [s.nagadNumber.trim()]));
+        setNagadPool([s.nagadNumber.trim()]);
+      } else {
+        setNagadPool([]);
       }
     });
 
@@ -113,13 +113,9 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       try {
         const local = getLocalSettings();
         const validBk = (local.bkashNumbers || []).filter(n => Boolean(n) && n.trim().length >= 10);
-        if (validBk.length > 0) {
-          setBkashPool(prev => (JSON.stringify(prev) === JSON.stringify(validBk) ? prev : validBk));
-        }
+        setBkashPool(validBk);
         const validNg = (local.nagadNumbers || []).filter(n => Boolean(n) && n.trim().length >= 10);
-        if (validNg.length > 0) {
-          setNagadPool(prev => (JSON.stringify(prev) === JSON.stringify(validNg) ? prev : validNg));
-        }
+        setNagadPool(validNg);
       } catch {}
     };
 
@@ -133,8 +129,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     };
   }, []);
 
-  const safeBkashPool = bkashPool.length > 0 ? bkashPool : OFFICIAL_BKASH_NUMBERS;
-  const safeNagadPool = nagadPool.length > 0 ? nagadPool : OFFICIAL_NAGAD_NUMBERS;
+  const safeBkashPool = bkashPool;
+  const safeNagadPool = nagadPool;
 
   // Current index for auto-rotation
   const [bkashIndex, setBkashIndex] = useState<number>(0);
@@ -212,9 +208,9 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   const seconds = timeLeft % 60;
   const formattedTime = `00:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   
-  // Selected method active number strictly from current rotation index of official lists
-  const activeBkashNum = safeBkashPool[bkashIndex % safeBkashPool.length] || safeBkashPool[0] || '01349782631';
-  const activeNagadNum = safeNagadPool[nagadIndex % safeNagadPool.length] || safeNagadPool[0] || '01768782530';
+  // Selected method active number strictly from current rotation index of admin list (empty if none configured)
+  const activeBkashNum = safeBkashPool.length > 0 ? (safeBkashPool[bkashIndex % safeBkashPool.length] || safeBkashPool[0]) : '';
+  const activeNagadNum = safeNagadPool.length > 0 ? (safeNagadPool[nagadIndex % safeNagadPool.length] || safeNagadPool[0]) : '';
   const activeAgentNum = selectedMethod.includes('nagad') ? activeNagadNum : activeBkashNum;
 
   const finalAmount = customAmount ? parseFloat(customAmount) || 0 : selectedAmount;
@@ -235,23 +231,25 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
   const handleSubmitTrx = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!trxId.trim()) {
+    const cleanTrx = trxId.trim();
+    if (!cleanTrx) {
       alert(lang === 'bn' ? 'দয়া করে ৮-১০ সংখ্যার Transaction ID (TrxID) লিখুন।' : 'Please enter Transaction ID.');
       return;
     }
 
     setIsSubmitting(true);
+
     setTimeout(() => {
       setIsSubmitting(false);
       setCurrentStep('success');
-      onSuccessDeposit(finalAmount, trxId.trim(), selectedMethod);
+      onSuccessDeposit(finalAmount, cleanTrx, selectedMethod);
 
       setTimeout(() => {
         setCurrentStep('form');
         setTrxId('');
         onClose();
       }, 2500);
-    }, 1200);
+    }, 800);
   };
 
   // 4 Deposit Methods matching screenshot with original realistic logos
